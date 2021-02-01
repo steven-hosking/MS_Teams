@@ -1,0 +1,232 @@
+#!/usr/bin/env python
+ 
+import json
+import sys
+import os
+import urllib
+import requests
+import yaml
+import itertools
+from time import sleep
+
+cfgpath = "/var/gitworking/app_msteams/graph_api/team_membership/teams.yml"
+
+def load_cfg():
+    with open(cfgpath, 'r') as stream:
+        try:
+            cfg = yaml.safe_load(stream)
+            teams = cfg["teams"].keys()
+            print teams
+
+            for team in teams:
+                groups_list = cfg["teams"][team]["groups"]
+
+                yield team, groups_list
+
+        except yaml.YAMLError as exc:
+                print(exc)
+
+
+data = {
+ 'grant_type': "client_credentials",
+ 'client_id': 'df31eb89-d77c-40fa-b9c4-2e473e15e7ee',
+ 'client_secret': 'PyDUOe]yA04pI7zEC9jWY@LVapXiIR[*',
+ 'scope': 'https://graph.microsoft.com/.default',
+ }
+params = urllib.urlencode(data)
+url = "https://login.microsoftonline.com/oauth2/v2.0/token"
+gettoken = requests.post(url,data=data)
+ 
+output = json.loads(gettoken.content)
+token=output["access_token"]
+ 
+headers={'Content-Type': 'application/json',
+ 'Authorization': 'Bearer {0}'.format(token)}
+
+
+# Commented out original fucntion
+# def getidbyname(teams):
+#     teams_ids = []
+#     for team in teams:
+#         url = "https://graph.microsoft.com/v1.0/groups?$filter=startswith(mail,'{0}')".format(team)
+#         getdata = requests.get(url, headers=headers)
+#         getdata.encoding = 'UTF-8'
+#         output = json.loads(getdata.content)
+# #        print output
+#         teams_ids.append(output["value"][0]["id"])
+#         #print output["value"][0]["id"]
+#     return teams_ids
+
+def getidbyname(team_name):
+    url = "https://graph.microsoft.com/v1.0/groups?$filter=startswith(mail,'{0}')".format(team_name)
+    getdata = requests.get(url, headers=headers)
+    getdata.encoding = 'UTF-8'
+    output = json.loads(getdata.content)
+
+    team_id = output["value"][0]["id"]
+
+    return team_id
+
+
+# Commented out original function
+# def getgroupidbyname(groups_list):
+#     group_ids = []
+#     for group in groups_list:
+#         url = "https://graph.microsoft.com/v1.0/groups?$filter=startswith(mailNickname,'{0}')".format(group)
+#         getdata = requests.get(url, headers=headers)
+#         getdata.encoding = 'UTF-8'
+#         output = json.loads(getdata.content)
+# #        print output
+#         group_ids.append(output["value"][0]["id"])
+#         #print output["value"][0]["id"]
+#     return group_ids
+
+
+def getgroupidbyname(groups_list):
+    group_ids = []
+    for group in groups_list:
+        url = "https://graph.microsoft.com/v1.0/groups?$filter=startswith(mailNickname,'{0}')".format(group)
+        getdata = requests.get(url, headers=headers)
+        getdata.encoding = 'UTF-8'
+        output = json.loads(getdata.content)
+#        print output
+        group_ids.append(output["value"][0]["id"])
+        #print output["value"][0]["id"]
+    return group_ids
+    
+
+def query_users(group_ids):
+    user_ids = []
+
+    # for group in group_ids:
+    #     print group
+    #
+    # exit()
+
+    for group in group_ids:
+        tmp_user_list = []
+        url = "https://graph.microsoft.com/v1.0/groups/{0}/members".format(group)
+        getdata = requests.get(url, headers=headers)
+        getdata.encoding = 'UTF-8'
+        output = json.loads(getdata.content)
+
+        for user in output["value"]:
+            tmp_user_list.append(user["id"])
+        user_ids.append(tmp_user_list)
+    return user_ids
+   
+
+def add_teams_users(team_id, user):
+    print "adding member"
+
+    data_url = 'https://graph.microsoft.com/v1.0/directoryObjects/{}'.format(user)
+    team_url = "https://graph.microsoft.com/v1.0/groups/{}/members/$ref".format(team_id[0])
+
+    url = team_url
+
+    data = {'@odata.id': data_url}
+    #data = json.loads(data_tmp)
+    getdata = requests.post(url, headers=headers, json=data)
+    #print getdata
+    getdata.encoding = 'UTF-8'
+    #print getdata.status_code
+    if str(getdata.status_code) in ('200,204'):
+        return True
+    else:
+        return False
+
+
+def remove_teams_users(team_id, user):
+    print "Attempting remove"
+    data_url = 'https://graph.microsoft.com/v1.0/directoryObjects/{}'.format(user)
+    team_url = "https://graph.microsoft.com/v1.0/groups/{}/members/{}/$ref".format(team_id[0], user)
+
+    url = team_url
+
+    data = {'@odata.id': data_url}
+
+    #data = json.loads(data_tmp)
+    getdata = requests.delete(url, headers=headers, json=data)
+    #print getdata
+    getdata.encoding = 'UTF-8'
+    #print getdata.status_code
+    if str(getdata.status_code) in ('200', '204'):
+        return True
+    else:
+        return False
+
+
+def main():
+    for cfg in load_cfg():
+        team_name = cfg[0]
+        team_name_trim = str(team_name).split('@')[0]
+        team_group_names = cfg[1]
+
+        #print team_name
+        #print team_group_names
+        # Get team IDs
+        # Putting team_id in a list as query_users function expects a list as an input
+        team_id = [getidbyname(team_name)]
+        # Get group IDs
+        group_ids = getgroupidbyname(team_group_names)
+
+        # Get current team member IDs from team ID
+        # Queries Azure AD
+        team_member_ids = list(itertools.chain.from_iterable(query_users(team_id)))
+        #print "{} Team Member IDs: {}".format(team_name, team_member_ids)
+
+
+        # Get group member IDs from group IDs
+        # Queries AD users
+        group_member_ids = list(itertools.chain.from_iterable(query_users(group_ids)))
+        #print "Group Member IDs: {}".format(group_member_ids)
+
+
+        unique_team_members = set(team_member_ids)
+        unique_group_members = set(group_member_ids)
+        #print unique_team_members
+        #print unique_group_members
+
+        missing_members = (unique_group_members - unique_team_members)
+        #print team_name
+        #print "Missing: {}".format(missing_members)
+
+
+        # Call function to add missing member to team
+        add_count = 0
+        for user in missing_members:
+            response = add_teams_users(team_id=team_id, user=user)
+            if response:
+                add_count += 1
+            else:
+                pass
+        if add_count > 0:
+            print "ADDED {} users to {}".format(add_count, team_name_trim)
+        else:
+            print "No users to ADD to: {}".format(team_name_trim)
+
+
+        # sleep(5)
+
+        # Find members of team that have been removed from the groups
+        updated_team_member_ids = set(list(itertools.chain.from_iterable(query_users(team_id))))
+
+        users_to_remove = updated_team_member_ids - unique_group_members
+
+        remove_count = 0
+        for user in users_to_remove:
+            response = remove_teams_users(team_id=team_id, user=user)
+            if response:
+                add_count += 1
+            else:
+                pass
+            remove_count += 1
+
+        if remove_count > 0:
+            print "REMOVED {} users from {}".format(remove_count, team_name_trim)
+        else:
+            print "No users to REMOVE from: {}".format(team_name_trim)
+
+
+if __name__ == '__main__':
+    main()
